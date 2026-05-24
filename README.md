@@ -17,11 +17,11 @@ This project explores the world of 10^15 magnification directly in the browser.
 そのため、まずは小さめに表示する「ミニマル展示版」を用意しています。  
 ノートPCなどでも眺めやすいサイズにしていますので、まずはこちらからどうぞ。(*´ω｀*)
 
-- [Minimal Demo / ミニマル展示版](./src/demo.html)
+- [Minimal Demo / ミニマル展示版](https://voich2014.github.io/mandel_zoom_abyss/src/)
 
 より大きく見たい場合は、環境に合わせて本体ページもお試しください。
 
-- [Main Viewer / 本体ページ](./src/mandelzoomabyss.html)
+- [Main Viewer / 本体ページ](https://voich2014.github.io/mandel_zoom_abyss/src/mandelzoomabyss.html)
 
 The iframe viewer is intentionally kept smaller for lighter viewing.  
 This artwork uses WebGPU heavily, so GPU load can become fairly high depending on the environment.
