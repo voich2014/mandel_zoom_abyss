@@ -38,7 +38,7 @@ while the GPU renders nearby pixels using f32 perturbation rendering shaders.
 
 すべてのピクセルを多倍長で直接計算するのではなく、  
 高精度な基準軌道とGPU並列描画を組み合わせることで、  
-ブラウザ上でリアルタイムな深度ズームを目指しています。
+ブラウザ上でリアルタイムな深層ズームを目指しています。
 
 Instead of calculating every pixel with arbitrary precision,  
 the renderer combines a high-precision reference orbit with GPU parallel rendering  
@@ -91,7 +91,7 @@ A long-time dream has finally become reality, and I am genuinely excited about i
 また、ソースはなるべく読みやすいよう、  
 1ファイル内へ整理してコメントを多めに入れています。
 
-WebGPU / WebAssembly GMP / 摂動法による深度ズーム実装を、  
+WebGPU / WebAssembly GMP / 摂動法による深層ズーム実装を、  
 creative coding 的な形で読めるサンプルとして残すことも目的にしています。
 
 The source is intentionally kept in a mostly single-file style with many comments,  
@@ -110,7 +110,7 @@ https://github.com/TOMOQ1024/Mandelbrot-Set-Viewer
 
 The color design of this project was inspired by TOMOQ1024's Mandelbrot-Set-Viewer.
 
-また、マンデルブロ深度ズーム文化、  
+また、マンデルブロ深層ズーム文化、  
 perturbation rendering 系研究、  
 creative coding community に感謝します。
 
