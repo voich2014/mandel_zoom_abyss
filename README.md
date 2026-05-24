@@ -1,6 +1,6 @@
 # Mandel Zoom Abyss
 
-WebGPU + WebAssembly GMP + 摂動法による、リアルタイム・マンデルブロ深度ズーム作品です。  
+WebGPU + WebAssembly GMP + 摂動法による、リアルタイム・マンデルブロ深層ズーム作品です。  
 10^15(1000兆倍)クラスの世界を、ブラウザ上でリアルタイムに探索することを目指しています。
 
 A real-time Mandelbrot deep zoom artwork powered by WebGPU, WebAssembly GMP and perturbation rendering.  
