@@ -1,0 +1,1167 @@
+﻿<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>Mandel Zoom Abyss Rev.220</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: #000; color: #fff; font-family: 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+    
+    #ui { position: absolute; top: 30px; left: 30px; pointer-events: none; z-index: 10; }
+    .title-main { font-size: 1.1em; letter-spacing: 4px; font-weight: 300; opacity: 0.9; }
+    .title-sub {
+      font-size: 0.7em; letter-spacing: 1px; color: rgba(210,210,210,0.82); margin-top: 4px;
+      text-shadow: 0 1px 4px rgba(0,0,0,0.85);
+    }
+    #zoom-text {
+      font-size: 0.9em; margin-top: 15px; font-family: monospace;
+      color: rgba(255,255,255,0.92); opacity: 0.9;
+      text-shadow: 0 1px 4px rgba(0,0,0,0.9), 0 0 12px rgba(0,0,0,0.55);
+    }
+
+    #spot-info { position: absolute; bottom: 34px; right: 40px; text-align: right; z-index: 10; opacity: 1; }
+    #spot-name { 
+      font-size: 1.8em; font-weight: 600; margin-bottom: 2px; color: #eee;
+      text-shadow: 0 2px 10px rgba(0,0,0,0.8), 0 0 2px rgba(0,0,0,1);
+    }
+    #spot-kind {
+      font-size: 0.62em; font-weight: 700; letter-spacing: 1.6px; margin-bottom: 3px;
+      color: rgba(220,220,220,0.72);
+      text-shadow: 0 1px 4px rgba(0,0,0,0.9);
+    }
+    #spot-coord {
+      font-size: 0.85em; font-family: 'Roboto Mono', monospace;
+      color: rgba(200,200,200,0.78); letter-spacing: 0.5px;
+      text-shadow: 0 1px 4px rgba(0,0,0,0.85);
+    }
+
+    #stats { 
+      position: absolute; bottom: 30px; left: 30px; 
+      font-size: 0.75em; font-family: monospace; color: #bbb; 
+      background: rgba(0,0,0,0.4); padding: 5px 10px; border-radius: 4px; z-index: 10; 
+    }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/gmp-wasm@1.3.2"></script>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+  
+  <div id="ui">
+    <div class="title-main">MANDEL ZOOM ABYSS</div>
+    <div class="title-sub">Rev.220</div>
+    <div id="zoom-text">ZOOM LOG 10^0</div>
+  </div>
+
+  <div id="spot-info">
+    <div id="spot-name">Initializing...</div>
+    <div id="spot-kind">...</div>
+    <div id="spot-coord">...</div>
+  </div>
+
+  <div id="stats">FPS: 0.0 | MIN: 0.0 | JANK: 0 | ITER: 300</div>
+
+  <script type="module">
+    /*
+      Mandel Zoom Abyss
+      WebGPU + GMP Perturbation Mandelbrot Renderer
+
+      この作品では、WebGPU と WebAssembly版 GMP を利用し、
+      摂動法によるリアルタイム深度ズームを実験しています。
+
+      GPU側では f32 による高速並列描画を行い、
+      CPU側では GMP 多倍長演算による512bit精度の
+      基準軌道計算を行っています。
+
+      WebGPU の高速描画性能と、
+      GMP + 摂動法による高精度計算を組み合わせることで、
+      従来の WebGL2 系ブラウザ実装では難しかった
+      高精度リアルタイムズームを実現しています。
+
+      技術実装には AI 支援も利用していますが、
+      システム設計、描画思想、最適化方針、
+      演出設計は作者によるものです。
+
+      配色設計については、
+      TOMOQ1024氏の Mandelbrot-Set-Viewer の
+      設計を参考にさせて頂きました。
+
+      https://github.com/TOMOQ1024/Mandelbrot-Set-Viewer
+
+      氏の配色がとても好きなんです。
+
+      また、マンデルブロ深度ズーム文化、
+      perturbation rendering 系研究、
+      creative coding community に感謝します。
+
+      参考資料・ライブラリ・引用元が存在する場合は、
+      それぞれのライセンスも確認してください。
+
+      Released under the MIT license.
+      see https://opensource.org/licenses/MIT
+
+      Where a citation is listed,
+      please also check the license of the citing source.
+
+      Copyright (c) 2026 ぼいち(@voich2014 in X)
+
+      The source code is licensed MIT.
+
+      However, rendered images and videos created using this source code
+      are licensed under CC BY-NC-SA 4.0.
+
+      http://creativecommons.org/licenses/by-nc-sa/4.0/
+    */
+
+    // ------------------------------------------------------------
+    // 巡礼スポット一覧
+    // ------------------------------------------------------------
+    // この作品で巡るマンデルブロ集合上の座標群です。
+    // 既存の有名座標ではなく、この作品用に探索・選定した「聖地」リストとして扱います。
+    const pilgrimageSpots = [
+      { name: "Pale Delta Rift", x: "-0.738247071430087", y: "0.14040264324797316" },
+      { name: "Cobalt Harbor", x: "-0.3108634041179903", y: "0.6255523077305407" },
+      { name: "Shadow Delta", x: "-0.7429057398289443", y: "-0.11725453405873851" },
+      { name: "Opal Highgate", x: "-0.09713561258045955", y: "0.8761646560952068" },
+      { name: "Black Spiral Gate", x: "-0.0812963142269291", y: "-0.6502443872741424" },
+      { name: "Ashen Delta", x: "-0.7398840844854713", y: "-0.13883713255450128" },
+      { name: "Far Night Gate", x: "-0.7329856632128358", y: "-0.17263094220217315" },
+      { name: "Ivory Spiral", x: "-0.061377428097184744", y: "0.6521205542981624" },
+      { name: "Pale Needle", x: "-0.09112262656679376", y: "0.6506012978148646" },
+      { name: "Deep Blue Lace", x: "-0.5671954074967652", y: "-0.4610982776479796" },
+      { name: "Aurora Chapel", x: "-0.5469561952073128", y: "0.49592362358700487" },
+      { name: "Blueglass Gate", x: "-0.43416899812640625", y: "0.5725895469915122" },
+      { name: "Obsidian Stair", x: "-0.15482315161498264", y: "-0.6533489906578325" },
+      { name: "Copper Undertow", x: "-0.7399145605708473", y: "-0.12272065519168973" },
+      { name: "Scarlet Thread", x: "-0.7383655528053641", y: "0.14193097614869477" },
+      { name: "Glass Undertow", x: "-0.7367572101131081", y: "-0.15324310831259935" },
+      { name: "Ruby Needle", x: "-0.7457233327641152", y: "-0.11634505394101143" },
+      { name: "High Ivory Gate", x: "-0.5113548594852909", y: "-0.5244353007525207" },
+      { name: "Opal Spiral", x: "-0.7343182313805446", y: "-0.15980495634768158" },
+      { name: "Green Cathedral", x: "0.2762610520245507", y: "0.007559806168079376" },
+      { name: "Emerald Chapel", x: "-0.6259688938525505", y: "-0.3870711759198457" },
+      { name: "Night Delta", x: "-0.046148857204243526", y: "-0.6895589064434171" },
+      { name: "Sable Spiral", x: "-0.5293304607458413", y: "-0.49716534439008686" },
+      { name: "Deep Indigo", x: "-0.7472451018951833", y: "0.09777122625801712" },
+      { name: "Charcoal Gate", x: "-0.7400582375451923", y: "-0.1274479884710163" },
+      { name: "Red Filament", x: "-0.746270680308342", y: "-0.12413550636870786" },
+      { name: "Dark Undertow", x: "0.28751575272157787", y: "0.014898665723856539" },
+      { name: "Faded Delta", x: "-0.06416209208546206", y: "0.6501383801107296" },
+      { name: "Midnight Gate", x: "-0.1762130484660156", y: "0.6490455039427616" },
+      { name: "Pale Foundry", x: "-0.6247403357224539", y: "-0.40200977855362" },
+      { name: "Obsidian Lace", x: "-0.7363797719106078", y: "0.15344717440009117" },
+      { name: "Ivory Forge", x: "-0.06262918740743771", y: "-0.6522205204120838" },
+      { name: "Quiet Delta", x: "-0.5313837520545348", y: "0.4970711405947805" },
+      { name: "High Lantern", x: "-0.7376128630116582", y: "-0.15254746636468916" },
+      { name: "Silver Forge", x: "-0.5718596556503326", y: "-0.4582356090890244" },
+      { name: "Misted Chapel", x: "-0.744414258055389", y: "0.14753752469830214" },
+      { name: "Cobalt Lace", x: "-0.5834252178762108", y: "0.44708613205235453" },
+      { name: "Gold Hall", x: "-0.3109336968860589", y: "-0.6222128668986262" },
+      { name: "Dusky Lace", x: "-0.5450060634175315", y: "-0.48804401638917627" },
+      { name: "Fine Needle", x: "-0.7408763917130418", y: "0.1480325358044356" },
+      { name: "Pale Spire", x: "0.28133995342254636", y: "0.010734555523376911" },
+      { name: "Opal Court", x: "-0.7401062808930874", y: "-0.13007069535693153" },
+      { name: "Ash Delta", x: "0.2653629054101184", y: "-0.003186887823045253" },
+      { name: "Frost Spire", x: "-0.538930618299637", y: "-0.5426351656671613" },
+      { name: "Bright Needle", x: "-0.3216703899321146", y: "-0.6255237088818104" },
+      { name: "Sable Court", x: "-0.6362444970663637", y: "-0.3849488583067432" },
+      { name: "High Spiral", x: "-0.5885990180168301", y: "-0.4425216132076457" },
+      { name: "Glass Edge", x: "-0.729905533729121", y: "-0.1679778026146814" },
+      { name: "Pale Edge", x: "-0.7337112178294919", y: "0.16838020496070383" },
+      { name: "Black Undertow", x: "-0.41917694186326115", y: "0.5746224248455838" },
+      { name: "Still Delta", x: "-0.5615305225457996", y: "0.4809965075692162" },
+      { name: "Blue Thread", x: "-0.5395019612228498", y: "0.4944850535318256" },
+      { name: "Quiet Undertow", x: "-0.056731747841695324", y: "-0.6744297730503604" },
+      { name: "White Needle", x: "-0.7395602505356074", y: "0.1492170745707117" },
+      { name: "North Spiral", x: "-0.7363899924759753", y: "-0.15637772043980658" },
+      { name: "Copper Gate", x: "-0.20334685058332977", y: "-0.6509536057943479" },
+      { name: "Sable Chapel", x: "-0.04483691500965506", y: "0.6519908310263418" },
+      { name: "Dark Delta", x: "-0.5187628035712988", y: "-0.5099272321956233" },
+      { name: "Glass Needle", x: "-0.050329766924260194", y: "0.6470483627170325" },
+      { name: "Pale Spiral", x: "-0.055417792906519034", y: "-0.6482785750064067" },
+      { name: "Dusk Lace", x: "-0.5858547779289074", y: "-0.45669256513006984" },
+      { name: "Ivory Delta", x: "0.28118628585431726", y: "-0.011019947780296207" },
+      { name: "Red Wire", x: "0.2762948145903647", y: "0.00887723690783605" },
+      { name: "Ashen Harbor", x: "-0.7381754180192948", y: "0.14988399157719687" },
+      { name: "Shadow Wire", x: "-0.5207382865110413", y: "-0.5108320126216859" },
+      { name: "Gold Pin", x: "-0.7420568206906318", y: "-0.1344426790731959" },
+      { name: "Quartz Gate", x: "-0.6343497213814407", y: "0.3869564129738137" },
+      { name: "Blue Rift", x: "-0.7449550681947731", y: "-0.12447365097701549" },
+      { name: "Night Forge", x: "-0.7425447186306119", y: "-0.14819440594967453" },
+      { name: "Indigo Thread", x: "-0.7424873919077217", y: "0.14785028447303922" },
+      { name: "Blue Chapel", x: "-0.03106501239119097", y: "-0.7208177804946899" },
+      { name: "Sable Delta", x: "-0.7428896194640547", y: "0.11505558709520847" },
+      { name: "Frost Thread", x: "-0.7415672334926203", y: "-0.15104766546655446" },
+      { name: "Cobalt Gate", x: "-0.7406495766341686", y: "-0.14817357789864763" },
+      { name: "Ashen Spiral", x: "-0.6340310875233263", y: "-0.3881269805738703" },
+      { name: "Amber Wire", x: "-0.732025057225488", y: "-0.16769773684535175" },
+      { name: "Quiet Lace", x: "-1.2634784933645278", y: "-0.03944906627293676" },
+      { name: "Dark Needle", x: "-0.7441359162256121", y: "0.10672255496121943" },
+      { name: "Black Delta", x: "-0.07269087171764113", y: "0.65120139636565" },
+      { name: "Glass Thread", x: "-0.6337911875639111", y: "0.37901517513673755" },
+      { name: "Violet Harbor", x: "-0.6523707921197638", y: "-0.35976334020495415" },
+      { name: "Frost Gate", x: "-0.7368376006688923", y: "-0.16562798022758216" },
+      { name: "Low Lantern", x: "0.2824236765727401", y: "-0.011127156399656087" },
+      { name: "Blue Edge", x: "-0.7358852189704775", y: "0.14517922306247055" },
+      { name: "Iron Court", x: "-0.05396320442203434", y: "-0.6521071484894492" },
+      { name: "Silver Delta", x: "-0.02981080985162407", y: "0.6476360290125012" },
+      { name: "Pale Thread", x: "-0.7376068650828674", y: "0.1642504632277414" },
+      { name: "Sable Forge", x: "-0.5097790941270068", y: "0.5132494744192809" },
+      { name: "Opal Needle", x: "-0.5498482711520046", y: "0.4803869323572144" },
+      { name: "Indigo Gate", x: "-0.5502872421918437", y: "-0.4808320642821491" },
+      { name: "Ruby Gate", x: "-0.040926569430157544", y: "0.6479066563770175" },
+      { name: "Glass Court", x: "-0.06695961585501209", y: "-0.6688936551660299" },
+      { name: "Night Spiral", x: "-0.7353498267233372", y: "-0.1516216948754154" },
+      { name: "Quiet Wire", x: "-0.7354150959029794", y: "0.15215214500296861" },
+      { name: "Shadow Lace", x: "-0.7379381968374364", y: "0.1458711192421615" },
+      { name: "Blue Ember", x: "-0.7429066072404384", y: "-0.1246715116663836" },
+      { name: "Ashen Thread", x: "-0.6425969849526882", y: "-0.37641639118548487" },
+      { name: "Frost Delta", x: "-0.5721541235595942", y: "-0.4694759757583961" },
+      { name: "Black Lace", x: "-0.7458432267387397", y: "0.10926162003539502" },
+      { name: "Pale Ember", x: "-0.7389068827852606", y: "0.13944170076027512" }
+    ];
+
+    // ------------------------------------------------------------
+    // 文字列ハッシュ
+    // ------------------------------------------------------------
+    // 文字列を32bit整数へ変換する軽量ハッシュ。
+    // 将来的に「スポット名から安定した演出乱数を作る」用途で使える。
+    function hashSeed(text) {
+      let hash = 2166136261;
+      for (let i = 0; i < text.length; i++) {
+        hash ^= text.charCodeAt(i);
+        hash = Math.imul(hash, 16777619);
+      }
+      return hash >>> 0;
+    }
+
+    // ------------------------------------------------------------
+    // seed付き疑似乱数
+    // ------------------------------------------------------------
+    // 同じseedから常に同じ乱数列を返す簡易PRNG。
+    // ランダム性を残しつつ、名前や座標に紐づく安定した演出を作るための補助関数。
+    function seededRandom(seed) {
+      let state = seed >>> 0;
+      return () => {
+        state += 0x6D2B79F5;
+        let t = state;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+
+    // ------------------------------------------------------------
+    // 複素平方根
+    // ------------------------------------------------------------
+    // 複素数 x + yi の平方根を返す補助関数。
+    // 現在の描画経路では主役ではないが、座標生成・解析系の補助として残しています。
+    function complexSqrt(x, y) {
+      const r = Math.hypot(x, y);
+      const real = Math.sqrt(Math.max(0.0, (r + x) * 0.5));
+      const imagSign = y < 0.0 ? -1.0 : 1.0;
+      const imag = imagSign * Math.sqrt(Math.max(0.0, (r - x) * 0.5));
+      return { x: real, y: imag };
+    }
+
+    const allSpots = pilgrimageSpots;
+
+    // ------------------------------------------------------------
+    // WebGPU / GMP / 作品状態
+    // ------------------------------------------------------------
+    // device/context/canvas はWebGPU描画の基本オブジェクトです。
+    // gmpCtx/Float はCPU側で高精度な基準軌道を計算するために使います。
+    let device, context, canvas;
+    let gmpCtx, Float;
+
+    // 直近に訪れた聖地を記録し、同じ場所や似た系統が連続しすぎないようにします。
+    let spotHistory = [];
+    let spotKindHistory = [];
+    let spotScaleHistory = [];
+
+    // ------------------------------------------------------------
+    // 描画・探索パラメータ
+    // ------------------------------------------------------------
+    // refOrbitに保持する基準軌道の最大長。
+    // fragment shader側の最大反復回数より少し余裕を持たせる。
+    const MAX_ORBIT_LIMIT = 1200;
+    // SEA-SENSEは、画面がほぼ「海」になったかをCPU側で軽く判定する仕組み。
+    // 中央と上下左右の5点を調べ、すべて似た反復回数なら次シーンへ移ります。
+    const SEA_SAMPLE_OFFSET = 0.2;
+    const SEA_SAMPLE_X = new Int8Array([0, 0, 0, -1, 1]);
+    const SEA_SAMPLE_Y = new Int8Array([0, -1, 1, 0, 0]);
+    const SEA_CHECK_INTERVAL = 3;
+    const SEA_CONFIRM_FRAMES = 21;
+    const SEA_ITER_TOLERANCE = 6;
+    const SEA_VISUAL_MATTE_RATIO = 0.94;
+    // 内部レンダー解像度です。
+    // CSS表示は100%のまま、WebGPUの内部解像度だけ90%に落とします。
+    // GPU負荷を下げつつ、ブラウザ拡大補間で細かいチラつきを少し丸めます。
+    const RENDER_SCALE_NORMAL = 0.90;
+    // パレットLUTは反復回数から色を引くための1次元テーブル。
+    // shader内で複雑な色計算をせず、CPUで事前生成した色を補間して使います。
+    const PALETTE_LUT_SIZE = MAX_ORBIT_LIMIT + 2;
+
+    // "RRGGBB" 形式の16進カラー文字列を 0.0〜1.0 のRGB配列へ変換します。
+    function parseHexColor(hex) {
+      return [
+        parseInt(hex.slice(0, 2), 16) / 255,
+        parseInt(hex.slice(2, 4), 16) / 255,
+        parseInt(hex.slice(4, 6), 16) / 255
+      ];
+    }
+
+    // ------------------------------------------------------------
+    // 汎用クランプ
+    // ------------------------------------------------------------
+    // 値を 0.0〜1.0 の範囲へ丸めます。
+    // 色LUT生成など、範囲外に飛ばしたくない値の安全弁として使います。
+    function clamp01(value) {
+      return Math.max(0.0, Math.min(1.0, value));
+    }
+
+    // 聖地へ向かう最初のカメラ移動用イージング。
+    // 等速直線移動よりも、開始と到着が少し柔らかく見える。
+    function cinematicEase(t) {
+      const x = Math.max(0.0, Math.min(1.0, t));
+      return x * x * x * (x * (x * 6.0 - 15.0) + 10.0);
+    }
+
+    // ------------------------------------------------------------
+    // カラーパレット
+    // ------------------------------------------------------------
+    // 現在のカラーパレットシステムです。
+    // 5色ベースの周期ランプを使い、マンデルブロらしい境界構造を維持しつつ、
+    // ランダム配色による情報量の低下や平坦化を避けます。
+    // period は色周期の長さ、stops/colors は色の節目、tone/swing/glow は明暗と発光感の調整値。
+    const CYCLIC_COLOR_RAMPS = Object.freeze([
+      { name: "Abyss Brass", tags: ["gold", "deep", "blue"], period: 130, stops: [0.00, 0.10, 0.39, 0.61, 0.82], colors: ["02040a", "07316d", "f1e7b3", "d78924", "350714"].map(parseHexColor), tone: 0.93, swing: 0.0600, glow: 0.034 },
+      { name: "Cobalt Ember", tags: ["blue", "gold"], period: 140, stops: [0.00, 0.12, 0.37, 0.58, 0.80], colors: ["01030b", "00448f", "8ed8ff", "fff1c8", "80220d"].map(parseHexColor), tone: 0.91, swing: 0.06005, glow: 0.030 },
+      { name: "Violet Furnace", tags: ["violet", "red"], period: 119, stops: [0.00, 0.11, 0.40, 0.63, 0.83], colors: ["050008", "32145f", "bd5cff", "fff6dc", "8b2b16"].map(parseHexColor), tone: 0.90, swing: 0.0600, glow: 0.030 },
+      { name: "Teal Sun", tags: ["teal", "gold", "green"], period: 151, stops: [0.00, 0.10, 0.36, 0.60, 0.81], colors: ["00110f", "006b73", "a7efe4", "fff2a8", "7a350f"].map(parseHexColor), tone: 0.92, swing: 0.0600, glow: 0.045 },
+      { name: "Magenta Ice", tags: ["violet", "ice"], period: 124, stops: [0.00, 0.13, 0.42, 0.64, 0.84], colors: ["06050d", "6d1a62", "ff72bd", "eaffff", "153f89"].map(parseHexColor), tone: 0.89, swing: 0.06005, glow: 0.030 },
+      { name: "Copper Night", tags: ["gold", "deep"], period: 135, stops: [0.00, 0.10, 0.38, 0.62, 0.82], colors: ["03020a", "17355d", "caa36a", "fff0c2", "5b170a"].map(parseHexColor), tone: 0.94, swing: 0.065, glow: 0.045 },
+      { name: "Emerald Crown", tags: ["green", "gold"], period: 146, stops: [0.00, 0.11, 0.36, 0.59, 0.80], colors: ["020705", "075b4f", "7edc8f", "fff7b7", "583116"].map(parseHexColor), tone: 0.91, swing: 0.0600, glow: 0.030 },
+      { name: "Blue Pearl", tags: ["blue", "ice"], period: 132, stops: [0.00, 0.12, 0.41, 0.64, 0.84], colors: ["00020c", "0b2474", "5aa9ff", "f8f7df", "4e1844"].map(parseHexColor), tone: 0.92, swing: 0.0600, glow: 0.034 },
+      { name: "Sky Pearl", tags: ["blue", "ice"], period: 143, stops: [0.00, 0.12, 0.36, 0.58, 0.80], colors: ["031323", "1e71a8", "72c8f2", "d7e3cf", "c8892e"].map(parseHexColor), tone: 0.96, swing: 0.060, glow: 0.030 },
+      { name: "Aurora Milk", tags: ["green", "ice"], period: 157, stops: [0.00, 0.11, 0.35, 0.60, 0.82], colors: ["021510", "1c8f7a", "86d9c2", "d8ead3", "9d62bd"].map(parseHexColor), tone: 1.00, swing: 0.0600, glow: 0.045 },
+      { name: "Pearl Sunrise", tags: ["gold", "ice"], period: 138, stops: [0.00, 0.10, 0.34, 0.57, 0.80], colors: ["10070a", "b8502d", "e6bd72", "d8dccf", "4f79c0"].map(parseHexColor), tone: 0.96, swing: 0.060, glow: 0.030 },
+      { name: "Clear Opal", tags: ["ice", "blue"], period: 148, stops: [0.00, 0.13, 0.39, 0.62, 0.84], colors: ["041019", "287b8f", "91d5d0", "d7e4d8", "5f78bd"].map(parseHexColor), tone: 1.00, swing: 0.0600, glow: 0.030 },
+      { name: "Royal Gold", tags: ["gold", "blue"], period: 135, stops: [0.00, 0.10, 0.36, 0.60, 0.83], colors: ["02040f", "0f3f9a", "468fe0", "e8c978", "b87412"].map(parseHexColor), tone: 0.98, swing: 0.0600, glow: 0.030 },
+      { name: "Deep Cobalt", tags: ["blue", "deep"], period: 154, stops: [0.00, 0.12, 0.40, 0.64, 0.85], colors: ["00030b", "001c58", "005bc8", "a9c9df", "e0bd6f"].map(parseHexColor), tone: 0.96, swing: 0.0600, glow: 0.034 },
+      { name: "Midnight Brass", tags: ["gold", "deep"], period: 130, stops: [0.00, 0.11, 0.37, 0.61, 0.84], colors: ["010205", "091d3a", "184f89", "d2ad64", "8f4d08"].map(parseHexColor), tone: 0.95, swing: 0.0600, glow: 0.030 },
+      { name: "Azure Crown", tags: ["blue", "gold"], period: 146, stops: [0.00, 0.10, 0.34, 0.57, 0.80], colors: ["010612", "003a7c", "1878d8", "e3cf86", "c88b1f"].map(parseHexColor), tone: 0.97, swing: 0.060, glow: 0.030 }
+    ]);
+    // 全パレットをMandelbrot用の候補として扱います。
+    const ALL_RAMP_INDICES = Object.freeze(CYCLIC_COLOR_RAMPS.map((_, index) => index));
+    
+    const renderShaderSrc = `
+      const PALETTE_LUT_MAX: f32 = ${MAX_ORBIT_LIMIT}.0;
+
+      // ------------------------------------------------------------
+      // uniform構造体
+      // ------------------------------------------------------------
+      // JavaScript側から毎フレーム渡される描画パラメータ。
+      // WebGPUのアラインメント制約に合わせるため、vec2/vec4単位で並べている。
+      struct Uniforms {
+        resolution: vec2<f32>,
+        camOffset: vec4<f32>, // x=実部オフセット, z=虚部オフセット。y/wは16byte整列用の未使用領域。
+        scale: f32,
+        maxIter: f32,
+        fade: f32
+      };
+
+      // ------------------------------------------------------------
+      // GPUリソースバインディング
+      // ------------------------------------------------------------
+      // uniform、基準軌道、色LUTをshaderから参照できるようにします。
+      // 重い計算や色生成はCPU側で済ませ、shader側は参照と反復計算に集中します。
+      @group(0) @binding(0) var<uniform> u: Uniforms;
+      @group(0) @binding(1) var<storage, read> refOrbit: array<vec2<f32>>; // CPU側で生成した高精度な基準軌道を、GPUで扱えるf32へ変換したもの。
+      @group(0) @binding(2) var<storage, read> palette: array<vec4<f32>>;   // CPU側で事前生成した色LUT。fragment shaderでは補間して参照するだけにする。
+      
+
+      // ------------------------------------------------------------
+      // パレットLUT参照
+      // ------------------------------------------------------------
+      // smooth_iを使ってCPU生成済みの色LUTから色を補間取得します。
+      // max_iter比率ではなく絶対的なsmooth_iを使い、ズーム中の色揺れを抑えます。
+      fn paletteLut(smooth_i: f32, max_iter: f32) -> vec3<f32> {
+        let lut_pos = clamp(smooth_i, 0.0, PALETTE_LUT_MAX);
+        let base = floor(lut_pos);
+        let idx = u32(base);
+        let t = lut_pos - base;
+        let color = mix(palette[idx].xyz, palette[idx + 1u].xyz, t);
+
+        // activeIterはズーム中に変化するため、smooth_i / max_iter による色補正は行わありません。
+        // 色の参照位置はsmooth_iだけに結びつけ、海のような領域の色が時間変化しにくいようにします。
+        return color;
+      }
+
+      // ------------------------------------------------------------
+      // フルスクリーン三角形ペア
+      // ------------------------------------------------------------
+      // 画面全体を覆う2枚の三角形を生成するvertex shader。
+      // マンデルブロ計算そのものはfragment shader側でピクセル単位に行います。
+      @vertex fn vs_main(@builtin(vertex_index) idx: u32) -> @builtin(position) vec4<f32> {
+        var pos = array<vec2<f32>, 6>(
+          vec2<f32>(-1.0, -1.0),
+          vec2<f32>( 1.0, -1.0),
+          vec2<f32>(-1.0,  1.0),
+          vec2<f32>(-1.0,  1.0),
+          vec2<f32>( 1.0, -1.0),
+          vec2<f32>( 1.0,  1.0)
+        );
+        return vec4<f32>(pos[idx], 0.0, 1.0);
+      }
+
+      // ------------------------------------------------------------
+      // マンデルブロ描画本体
+      // ------------------------------------------------------------
+      // 各ピクセルの座標を基準軌道との差分として追跡し、脱出反復数から色を決める。
+      // f32摂動法により、深いズームでもGPUでリアルタイム描画できるようにします。
+      @fragment fn fs_main(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+        let res_wh = u.resolution;
+        let uv = (pos.xy - res_wh * 0.5) / min(res_wh.x, res_wh.y);
+
+        let max_iter = u.maxIter;
+        let max_i = i32(max_iter);
+        var iterations = max_iter;
+        var z_final_sq = 0.0;
+
+        // f32摂動法です。
+        // 各ピクセルは、CPU側で計算した基準軌道 refOrbit からの微小差分として追跡します。
+        let delta_c = vec2<f32>(
+          uv.x * u.scale + u.camOffset.x,
+          -uv.y * u.scale - u.camOffset.z
+        );
+
+        // ------------------------------------------------------------
+        // 摂動初期値
+        // ------------------------------------------------------------
+        // delta_z は基準軌道から見た現在ピクセルのズレ。
+        // z_ref はCPU側で計算済みの基準軌道上の現在位置。
+        var delta_z = vec2<f32>(0.0);
+        var z_ref = refOrbit[0];
+
+        // ------------------------------------------------------------
+        // 摂動反復ループ
+        // ------------------------------------------------------------
+        // 基準軌道 z_ref と差分 delta_z を使い、各ピクセルの軌道を近似的に追跡します。
+        // 通常の複素反復を直接深い座標で行うより、float精度の破綻を遅らせられる。
+        for (var n = 0; n < max_i - 1; n = n + 1) {
+          delta_z = vec2<f32>(
+            2.0 * (z_ref.x * delta_z.x - z_ref.y * delta_z.y)
+              + (delta_z.x * delta_z.x - delta_z.y * delta_z.y)
+              + delta_c.x,
+            2.0 * (z_ref.x * delta_z.y + z_ref.y * delta_z.x)
+              + 2.0 * delta_z.x * delta_z.y
+              + delta_c.y
+          );
+
+          // ------------------------------------------------------------
+          // 基準軌道との合成
+          // ------------------------------------------------------------
+          // 次の基準軌道 next_ref に、ピクセル固有の差分 delta_z を足して最終的なzを得る。
+          // このzの大きさで脱出判定を行います。
+          let next_ref = refOrbit[n + 1];
+          let z_final = next_ref + delta_z;
+          z_final_sq = dot(z_final, z_final);
+
+          // ------------------------------------------------------------
+          // 脱出判定
+          // ------------------------------------------------------------
+          // |z|^2 が 4 を超えたらマンデルブロ集合の外へ脱出したとみなす。
+          // その時点の反復回数を色付けに使います。
+          if (z_final_sq > 4.0) {
+            iterations = f32(n);
+            break;
+          }
+
+          z_ref = next_ref;
+        }
+
+        // ------------------------------------------------------------
+        // 脱出ピクセルの色付け
+        // ------------------------------------------------------------
+        // 脱出した点はsmooth iterationで滑らかな反復値を作り、LUTから色を引く。
+        // さらに高Iter側の細部や海に近い領域だけ、見た目が暴れないよう少し補正します。
+        if (iterations < max_iter) {
+          let smooth_i = iterations + 1.0 - log(log(z_final_sq + 1.0)) / 0.693;
+          let iterRatio = clamp(smooth_i / max_iter, 0.0, 1.0);
+          var baseColor = paletteLut(smooth_i, max_iter);
+
+          // 高Iter側の細かい枝は、黒いレース状の反復模様が前面に出すぎることがあります。
+          // そのため、末期に近いディテールだけ彩度と暗部を少し丸めて、大気感を出す。
+          let detailSoft = smoothstep(0.38, 0.88, iterRatio);
+          let luma = dot(baseColor, vec3<f32>(0.299, 0.587, 0.114));
+          let desatColor = mix(vec3<f32>(luma), baseColor, 0.78);
+          baseColor = mix(baseColor, desatColor, detailSoft * 0.30);
+          baseColor = max(baseColor, vec3<f32>(0.018, 0.022, 0.028) * detailSoft);
+
+          // maxIter直前で脱出する点は、見た目上は海に近い。
+          // 明るいパレット帯に当たって海が白く見えすぎないよう、ごく暗い濃紺へ滑らかに寄せる。
+          let seaMatte = smoothstep(0.90, 0.995, iterRatio);
+          let seaColor = vec3<f32>(0.006, 0.014, 0.026);
+          return vec4<f32>(mix(baseColor, seaColor, seaMatte) * u.fade, 1.0);
+        }
+
+        // 真の非脱出領域は黒として描画します。
+        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+      }
+    `;
+
+    // ------------------------------------------------------------
+    // 初期化処理
+    // ------------------------------------------------------------
+    // GMP、WebGPU、DOM要素、GPUバッファ、描画パイプラインを準備し、
+    // 最初の描画ループを開始します。
+    async function init() {
+
+      // ------------------------------------------------------------
+      // ライブラリ・GPU・DOM参照の取得
+      // ------------------------------------------------------------
+      // GMPは GNU Multiple Precision Arithmetic Library の略。
+      // 多倍長演算ライブラリで、通常のfloat64より遥かに高い精度で数値計算できます。
+      //
+      // この作品では、WebAssembly版のGMPを使ってCPU側の基準軌道を高速計算しています。
+      // JavaScript標準の倍精度(float64)だけでは、深いズーム時に桁が崩れてしまうため、
+      // anchorCenter周辺の基準軌道はGMPによる多倍長計算で維持します。
+      //
+      // 現在のCPU側GMP精度は約512bit相当。
+      // 一方GPU側は高速性重視のf32(32bit float)で描画しており、
+      // CPU側の高精度基準軌道との差分だけをshaderへ渡す「摂動法」で深いズームを実現しています。
+      //
+      // WebGPU device/context は実際の描画に使い、DOM要素はHUD表示に使っています。
+      const gmp = await window.gmp.init();
+      gmpCtx = gmp.getContext({ precisionBits: 512 });
+      Float = gmpCtx.Float;
+      const adapter = await navigator.gpu.requestAdapter();
+      const device = await adapter.requestDevice();
+      canvas = document.getElementById("canvas");
+      const spotInfoEl = document.getElementById("spot-info");
+      const spotNameEl = document.getElementById("spot-name");
+      const spotKindEl = document.getElementById("spot-kind");
+      const spotCoordEl = document.getElementById("spot-coord");
+      const zoomTextEl = document.getElementById("zoom-text");
+      const statsEl = document.getElementById("stats");
+      context = canvas.getContext("webgpu");
+      const presentationFormat = navigator.gpu.getPreferredCanvasFormat();
+      let currentRenderScale = 0.0;
+
+      // ------------------------------------------------------------
+      // キャンバス解像度管理
+      // ------------------------------------------------------------
+      // CSS表示サイズは画面いっぱいのまま、内部レンダー解像度だけRENDER_SCALE_NORMALで調整します。
+      // リサイズ時にもWebGPU contextを再設定します。
+      const resize = () => {
+        canvas.width = Math.max(1, Math.floor(window.innerWidth * currentRenderScale));
+        canvas.height = Math.max(1, Math.floor(window.innerHeight * currentRenderScale));
+        context.configure({ device, format: presentationFormat, alphaMode: 'premultiplied' });
+      };
+      const setRenderScale = (scale) => {
+        if (scale === currentRenderScale) return;
+        currentRenderScale = scale;
+        resize();
+      };
+      window.addEventListener('resize', resize);
+      setRenderScale(RENDER_SCALE_NORMAL);
+
+      // ------------------------------------------------------------
+      // WebGPUパイプラインとバッファ作成
+      // ------------------------------------------------------------
+      // shader、uniform、基準軌道、色LUTをGPUに渡すためのパイプライン一式を作ります。
+      // 以後のフレームでは、これらを使い回して毎回の生成コストを避けます。
+      const renderPipeline = device.createRenderPipeline({ layout: "auto", vertex: { module: device.createShaderModule({ code: renderShaderSrc }), entryPoint: "vs_main" }, fragment: { module: device.createShaderModule({ code: renderShaderSrc }), entryPoint: "fs_main", targets: [{ format: presentationFormat }] } });
+      const uniformBuffer = device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+      const orbitBuffer = device.createBuffer({ size: MAX_ORBIT_LIMIT * 8, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+      const paletteBuffer = device.createBuffer({ size: PALETTE_LUT_SIZE * 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+      const renderBindGroup = device.createBindGroup({ layout: renderPipeline.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: uniformBuffer } }, { binding: 1, resource: { buffer: orbitBuffer } }, { binding: 2, resource: { buffer: paletteBuffer } }] });
+      const uniformData = new Float32Array(11);
+      const paletteLutData = new Float32Array(PALETTE_LUT_SIZE * 4);
+
+      // ------------------------------------------------------------
+      // シーン状態変数
+      // ------------------------------------------------------------
+      // 現在の中心座標、ズーム倍率、フェード状態、SEA-SENSE状態、
+      // フレーム時間計測値など、描画中に変化する状態をまとめて保持します。
+      const zeroFloat = Float("0.0");
+      let anchorCenter = { x: zeroFloat, y: zeroFloat }; 
+      let startViewCenter = { x: Float("-0.5"), y: zeroFloat };
+      let anchorXf = 0.0, anchorYf = 0.0;
+      let curScale = 4.0, fade = 0.0;
+      let lastTime = performance.now(), startTime = lastTime;
+      let transitionState = 0;
+      let sceneReady = false, pendingScenePrepare = true;
+      let seaFrames = 0;
+      let seaCheckTick = 0;
+      let frameMs = 16.6, fpsSmoothed = 60.0, minFps = 60.0, jankCount = 0, frameStatTick = 0;
+      let lastPaletteIdx = -1;
+
+      // ------------------------------------------------------------
+      // 周期パレットのサンプリング
+      // ------------------------------------------------------------
+      // 色ランプ上のphase位置からRGBを取得します。
+      // stopsの間は線形補間し、最後の色から最初の色へは周期的に折り返します。
+      function sampleCyclicRamp(ramp, phase) {
+        const stops = ramp.stops;
+        const colors = ramp.colors;
+        let p = phase % 1.0;
+        if (p < 0.0) p += 1.0;
+
+        // ------------------------------------------------------------
+        // 通常区間の補間
+        // ------------------------------------------------------------
+        // phase が stops[i]〜stops[i+1] に入っている場合、
+        // その2色の間を線形補間して現在色を作ります。
+        for (let i = 0; i < stops.length - 1; i++) {
+          if (p >= stops[i] && p < stops[i + 1]) {
+            const t = (p - stops[i]) / (stops[i + 1] - stops[i]);
+            const c0 = colors[i];
+            const c1 = colors[i + 1];
+            return [
+              c0[0] + (c1[0] - c0[0]) * t,
+              c0[1] + (c1[1] - c0[1]) * t,
+              c0[2] + (c1[2] - c0[2]) * t
+            ];
+          }
+        }
+
+        // ------------------------------------------------------------
+        // 末尾から先頭への折り返し補間
+        // ------------------------------------------------------------
+        // phase が最後のstop以降、または先頭stop以前にある場合、
+        // 最後の色と最初の色をつないで周期的な色変化にします。
+        const last = stops.length - 1;
+        const wrapWidth = 1.0 - stops[last] + stops[0];
+        const t = ((p >= stops[last] ? p : p + 1.0) - stops[last]) / wrapWidth;
+        const c0 = colors[last];
+        const c1 = colors[0];
+        return [
+          c0[0] + (c1[0] - c0[0]) * t,
+          c0[1] + (c1[1] - c0[1]) * t,
+          c0[2] + (c1[2] - c0[2]) * t
+        ];
+      }
+
+      // 選択された周期ランプから、GPUで参照するための色LUTを作ります。
+      // ここで周期色・明暗揺れ・暗部持ち上げをまとめて計算しておくことで、
+      // fragment shader側は軽いLUT参照だけで済む。
+      function buildPaletteLut(ramp, cycleOffset) {
+        const data = paletteLutData;
+        const period = ramp.period;
+        const textureBoost = 0.92;
+        const darkLift = 0.018;
+
+        for (let i = 0; i < PALETTE_LUT_SIZE; i++) {
+          const phase = i / period + cycleOffset;
+          const color = sampleCyclicRamp(ramp, phase);
+          const wave = 0.5 + 0.5 * Math.sin(i * 0.043 + cycleOffset * 6.283);
+          const crest = Math.pow(0.5 + 0.5 * Math.sin(i * 0.173 + cycleOffset * 9.7), 7.0);
+          const tone = ramp.tone + ramp.swing * (wave - 0.5) * textureBoost;
+          const glow = ramp.glow * crest * textureBoost;
+          const offset = i * 4;
+          data[offset] = clamp01(darkLift + (color[0] * tone + glow) * (1.0 - darkLift));
+          data[offset + 1] = clamp01(darkLift + (color[1] * tone + glow) * (1.0 - darkLift));
+          data[offset + 2] = clamp01(darkLift + (color[2] * tone + glow) * (1.0 - darkLift));
+          data[offset + 3] = 1.0;
+        }
+        return data;
+      }
+
+      // 次シーン用のパレットを選ぶ。
+      // 直前と同じパレットは避けつつ、cycleOffsetで開始位置をずらし、
+      // 同じパレットでも毎回少し違う表情になるようにします。
+      
+    // ------------------------------------------------------------
+    // 聖地名からパレットテーマを推定します。
+    // 完全固定ではなく、名前の印象に寄せた配色候補を優先するために使います。
+    // ------------------------------------------------------------
+    function detectPaletteTheme(name) {
+      const lower = name.toLowerCase();
+
+      if (/(cobalt|azure|blue|indigo|sapphire)/.test(lower)) return "blue";
+      if (/(gold|amber|brass|copper|sun)/.test(lower)) return "gold";
+      if (/(emerald|green|jade|teal)/.test(lower)) return "green";
+      if (/(violet|magenta|purple|ruby|scarlet)/.test(lower)) return "violet";
+      if (/(night|deep|sable|obsidian|abyss|midnight)/.test(lower)) return "deep";
+      if (/(ice|opal|pearl|ivory|frost|clear|glass)/.test(lower)) return "ice";
+
+      return null;
+    }
+
+      // ------------------------------------------------------------
+      // 次シーン用のパレット選択
+      // ------------------------------------------------------------
+      // 聖地名から推定したテーマ色を優先しつつ、完全固定にはしません。
+      // 名前と色の印象を合わせながら、ランダム性も残して毎回少し違う表情にします。
+      function selectNewPalette(spotName = "") {
+        const theme = detectPaletteTheme(spotName);
+        let rampChoices = ALL_RAMP_INDICES;
+
+        // テーマが判定できた場合は、約72%の確率で同系統パレットを優先します。
+        // 残りは全体ランダムにして、予想外の配色も少し残します。
+        if (theme && Math.random() < 0.72) {
+          const themedChoices = ALL_RAMP_INDICES.filter(index => {
+            const ramp = CYCLIC_COLOR_RAMPS[index];
+            return ramp.tags && ramp.tags.includes(theme);
+          });
+
+          if (themedChoices.length > 0) {
+            rampChoices = themedChoices;
+          }
+        }
+
+        let rampIdx;
+        do {
+          rampIdx = rampChoices[Math.floor(Math.random() * rampChoices.length)];
+        } while (rampIdx === lastPaletteIdx && rampChoices.length > 1);
+
+        lastPaletteIdx = rampIdx;
+
+        const ramp = CYCLIC_COLOR_RAMPS[rampIdx];
+        const cycleOffset = Math.random();
+        device.queue.writeBuffer(paletteBuffer, 0, buildPaletteLut(ramp, cycleOffset));
+      }
+
+      // シーン切り替え時に完全な黒フレームを1枚描く。
+      // 重い準備処理を黒画面の裏で行い、次のシーンが途中から表示されるのを防ぎます。
+      function renderBlackFrame() {
+        const commandEncoder = device.createCommandEncoder();
+        const textureView = context.getCurrentTexture().createView();
+        const renderPass = commandEncoder.beginRenderPass({ colorAttachments: [{ view: textureView, clearValue: { r: 0, g: 0, b: 0, a: 1 }, loadOp: "clear", storeOp: "store" }] });
+        renderPass.end();
+        device.queue.submit([commandEncoder.finish()]);
+      }
+
+      // シーン準備後にアニメーション時計と計測値をリセットします。
+      // 準備処理に時間がかかっても、次シーンの初速やFPS表示が乱れないようにします。
+      function resetAnimationClock() {
+        const now = performance.now();
+        lastTime = now;
+        startTime = now;
+        frameMs = 16.6;
+        fpsSmoothed = 60.0;
+        minFps = 60.0;
+        jankCount = 0;
+        frameStatTick = 0;
+      }
+
+      // 黒画面の裏で、次シーンに必要な準備をまとめて行います。
+      // パレット選択、聖地選択、基準軌道更新をここで済ませる。
+      function prepareSceneBehindBlack() {
+        fade = 0.0;
+        spotInfoEl.style.opacity = 0.0;
+        selectNewSpot();
+        selectNewPalette(spotNameEl.textContent);
+        transitionState = 0;
+        sceneReady = true;
+        resetAnimationClock();
+      }
+
+      // 次のフレームでシーン準備へ入るための予約。
+      // 即座に準備せず、まず黒へフェードしてから実行します。
+      function requestScenePrepare() {
+        fade = 0.0;
+        sceneReady = false;
+        pendingScenePrepare = true;
+        spotInfoEl.style.opacity = 0.0;
+      }
+
+      // 次に訪れる聖地を選ぶ。
+      // 完全ランダムではなく、直近の訪問履歴・名前系統・深度帯を少し見て、
+      // 似た絵が連続しすぎないようにします。
+      function selectNewSpot() {
+        // 短期履歴を使った重み付き抽選。
+        let bestIdx = 0;
+        let bestScore = -1e9;
+
+        // ------------------------------------------------------------
+        // 候補スポットの重み付き抽選
+        // ------------------------------------------------------------
+        // 24回ランダム候補を試し、直近履歴・系統・深度帯を見てスコアが高いものを採用します。
+        // 完全ランダムよりも、似た景色が連続しにくい。
+        for (let attempt = 0; attempt < 24; attempt++) {
+          const idx = Math.floor(Math.random() * pilgrimageSpots.length);
+          const s = pilgrimageSpots[idx];
+
+          let score = Math.random() * 0.25;
+
+          if (spotHistory.includes(idx)) score -= 1000.0;
+
+          const type = (s.kind ?? "").toLowerCase();
+          const scaleBucket = Math.round(Math.log10(s.scale ?? 1e-6));
+
+          if (spotKindHistory.includes(type)) score -= 0.8;
+          if (spotScaleHistory.includes(scaleBucket)) score -= 0.4;
+
+          // 深度帯が偏りすぎないよう、少しだけスコアを散らす。
+          score += Math.abs(scaleBucket) * 0.03;
+
+          if (score > bestScore) {
+            bestScore = score;
+            bestIdx = idx;
+          }
+        }
+
+        // ------------------------------------------------------------
+        // 選択履歴の更新
+        // ------------------------------------------------------------
+        // 今回選ばれたスポット番号を履歴に保存します。
+        // 履歴が長くなりすぎないよう、古いものから削る。
+        const spotIdx = bestIdx;
+        spotHistory.push(spotIdx);
+        if (spotHistory.length > 8) spotHistory.shift();
+
+        // ------------------------------------------------------------
+        // 選択スポットの分類情報
+        // ------------------------------------------------------------
+        // 名前系統や深度帯を履歴に残し、次回以降の抽選で同系統が連続しにくくします。
+        const spot = pilgrimageSpots[spotIdx];
+        const chosenType = (spot.kind ?? "").toLowerCase();
+        const chosenScaleBucket = Math.round(Math.log10(spot.scale ?? 1e-6));
+
+        // ------------------------------------------------------------
+        // 名前系統履歴の更新
+        // ------------------------------------------------------------
+        // 同じ雰囲気のスポットが連続しすぎないよう、直近のkindを短期履歴として保持します。
+        spotKindHistory.push(chosenType);
+        if (spotKindHistory.length > 5) spotKindHistory.shift();
+
+        // ------------------------------------------------------------
+        // 深度帯履歴の更新
+        // ------------------------------------------------------------
+        // 同じ深度帯ばかりが続かないよう、scaleBucketを短期履歴として保持します。
+        spotScaleHistory.push(chosenScaleBucket);
+        if (spotScaleHistory.length > 5) spotScaleHistory.shift();
+
+        // ------------------------------------------------------------
+        // 新しい中心座標の設定
+        // ------------------------------------------------------------
+        // 選ばれた聖地座標を次シーンのanchorCenterに設定します。
+        // startViewCenterは全体表示から聖地へ向かう初期移動の始点。
+        anchorCenter = { x: Float(spot.x), y: Float(spot.y) };
+        startViewCenter = { x: Float("-0.5"), y: zeroFloat };
+
+        // ------------------------------------------------------------
+        // シーン状態とHUDの更新
+        // ------------------------------------------------------------
+        // GPUへ渡すf32中心座標をキャッシュし、ズーム・SEA-SENSE状態を初期化します。
+        // その後、基準軌道を作り直してHUDに聖地名と座標を表示します。
+        anchorXf = parseFloat(anchorCenter.x.toString());
+        anchorYf = parseFloat(anchorCenter.y.toString());
+        curScale = 4.0 * Math.pow(10, 0.5);
+        seaFrames = 0;
+        seaCheckTick = 0;
+        updateReferenceOrbit();
+        spotNameEl.textContent = spot.name;
+        spotKindEl.textContent = "MANDELBROT SET";
+        spotCoordEl.textContent = `LOC: ${anchorXf.toFixed(10)}, ${anchorYf.toFixed(10)}`;
+      }
+
+      // ------------------------------------------------------------
+      // 中心座標の簡易探索
+      // ------------------------------------------------------------
+      // 指定座標の周辺を少しだけ探索し、より反復回数が伸びる位置へ寄せる補助関数。
+      // 現在の巡礼スポットは事前生成済みなので、必要に応じて使うために残しています。
+      function hillClimbAnchor(targetX, targetY) {
+        let cx = targetX, cy = targetY;
+        let bestI = calcEscapeIter(cx, cy, 1500); 
+        if (bestI >= 1500) return { x: cx, y: cy };
+        let step = 0.0001;
+        for (let i = 0; i < 30; i++) {
+          let improved = false;
+          for (let angle of [0, 90, 180, 270, 45, 135, 225, 315]) {
+            let rad = angle * Math.PI / 180;
+            let tx = cx.add(Float((Math.cos(rad) * step).toString()));
+            let ty = cy.add(Float((Math.sin(rad) * step).toString()));
+            let it = calcEscapeIter(tx, ty, 1500);
+            if (it > bestI) { bestI = it; cx = tx; cy = ty; improved = true; if (bestI >= 1500) break; }
+          }
+          if (bestI >= 1500) break;
+          step *= improved ? 0.9 : 0.7;
+        }
+        return { x: cx, y: cy };
+      }
+
+      // CPU側の簡易エスケープ判定。
+      // SEA-SENSEや聖地選定の補助に使うため、ここではf64相当の通常Numberで十分と割り切っています。
+      function calcEscapeIter(cx, cy, maxIter) {
+        const cx_num = parseFloat(cx.toString());
+        const cy_num = parseFloat(cy.toString());
+        let x = 0.0;
+        let y = 0.0;
+
+        // ------------------------------------------------------------
+        // 通常のマンデルブロ反復
+        // ------------------------------------------------------------
+        // z = z^2 + c を繰り返し、|z|^2 が4を超えたら脱出として反復回数を返します。
+        for (let n = 0; n < maxIter; n++) {
+          const x2 = x * x;
+          const y2 = y * y;
+          if (x2 + y2 > 4.0) return n;
+
+          y = 2.0 * x * y + cy_num;
+          x = x2 - y2 + cx_num;
+        }
+
+        return maxIter;
+      }
+
+      // GPU摂動計算の基準になる軌道をCPU側で高精度に作成します。
+      // ここではGMPで計算した値をf32へ落としてrefOrbitへ転送し、
+      // shader側では各ピクセルとの差分だけを高速に追跡します。
+      function updateReferenceOrbit() {
+        let Zx = gmpCtx.Float(0);
+        let Zy = gmpCtx.Float(0);
+        const data = new Float32Array(MAX_ORBIT_LIMIT * 2);
+        const ax = anchorCenter.x;
+        const ay = anchorCenter.y;
+
+        // ------------------------------------------------------------
+        // 基準軌道の生成ループ
+        // ------------------------------------------------------------
+        // anchorCenterをcとして z = z^2 + c を高精度に反復し、
+        // 各ステップのzをf32配列へ保存してGPUへ転送します。
+        for (let n = 0; n < MAX_ORBIT_LIMIT; n++) {
+          const offset = n * 2;
+          data[offset] = parseFloat(Zx.toString());
+          data[offset + 1] = parseFloat(Zy.toString());
+
+          const x2 = Zx.mul(Zx);
+          const y2 = Zy.mul(Zy);
+          const nextZy = Zx.mul(Zy).mul(2).add(ay);
+
+          Zx = x2.sub(y2).add(ax);
+          Zy = nextZy;
+        }
+
+        device.queue.writeBuffer(orbitBuffer, 0, data);
+      }
+
+      // SEA-SENSE判定です。
+      // 画面の中央と上下左右をサンプルし、すべて同じような反復結果なら
+      // すでに見どころが少ない「海」とみなして次シーンへ移ります。
+      function checkSeaCPU(activeIter, scale, camOffX, camOffY) {
+        const ratio = canvas.width / canvas.height;
+        const xStep = SEA_SAMPLE_OFFSET * ratio * scale;
+        const yStep = SEA_SAMPLE_OFFSET * scale;
+        const visualSeaIter = Math.floor(activeIter * SEA_VISUAL_MATTE_RATIO);
+        let firstIter = -1;
+        let allSame = true;
+        for (let i = 0; i < SEA_SAMPLE_X.length; i++) {
+          const cx = anchorCenter.x.add(Float((SEA_SAMPLE_X[i] * xStep).toString())).add(camOffX);
+          const cy = anchorCenter.y.add(Float((-SEA_SAMPLE_Y[i] * yStep).toString())).add(camOffY);
+          let it = calcEscapeIter(cx, cy, activeIter);
+          
+          // shader側では高Iterの脱出点を海として暗く見せている。
+          // CPU側の判定もそれに合わせないと、見た目は空の海なのに
+          // 意味の薄い反復回数差だけでSEA-SENSEが失敗し続ける。
+          if (it >= visualSeaIter) it = activeIter;
+
+          if (firstIter === -1) firstIter = it;
+          else if (Math.abs(it - firstIter) > SEA_ITER_TOLERANCE) { allSame = false; break; }
+        }
+        return allSame;
+      }
+
+      // メイン描画ループ。
+      // ズーム進行、カメラ移動、SEA-SENSE判定、uniform更新、WebGPU描画を毎フレーム行います。
+      function frame(time) {
+
+        // ------------------------------------------------------------
+        // シーン準備
+        // ------------------------------------------------------------
+        // pendingScenePrepare が立っている場合は、まず黒フレームを1枚描いてから
+        // setTimeout経由で重い準備処理を行う。これにより、準備中の固まりを画面に見せありません。
+        if (pendingScenePrepare) {
+          pendingScenePrepare = false;
+          renderBlackFrame();
+
+          setTimeout(() => {
+            prepareSceneBehindBlack();
+            requestAnimationFrame(frame);
+          }, 0);
+
+          return;
+        }
+
+        // ------------------------------------------------------------
+        // シーン未準備時の待機
+        // ------------------------------------------------------------
+        // 黒画面の裏で準備中の場合は、描画処理を進めず次フレームを待つ。
+        // これにより、未初期化の状態でshaderを動かさありません。
+        if (!sceneReady) {
+          requestAnimationFrame(frame);
+          return;
+        }
+
+        // ------------------------------------------------------------
+        // フレーム時間計測
+        // ------------------------------------------------------------
+        // 実測フレーム時間からFPSを計算してHUDへ出します。
+        // FPS/MIN/JANKは短期的な重さやカクつきの確認用で、描画内容には影響しません。
+        const deltaTime = time - lastTime;
+        lastTime = time;
+
+        frameMs = deltaTime;
+
+        // FPSは瞬間値だと激しく揺れるため、軽い移動平均で見やすくします。
+        const instantFps = deltaTime > 0 ? 1000.0 / deltaTime : 0.0;
+        fpsSmoothed = fpsSmoothed * 0.90 + instantFps * 0.10;
+        minFps = Math.min(minFps, fpsSmoothed);
+
+        if (frameMs > 34.0) jankCount++;
+
+        if (++frameStatTick >= 60) {
+          minFps = fpsSmoothed;
+          jankCount = 0;
+          frameStatTick = 0;
+        }
+
+        // ------------------------------------------------------------
+        // 現在のズーム深度と反復回数
+        // ------------------------------------------------------------
+        // curZoom は表示用にも制御用にも使うズーム深度。
+        // activeIter は深いズームほど増やすが、作品バランスのため最大800を基準にしています。
+        const curZoom = Math.log10(4.0 / curScale);
+
+        let activeIter = 240;
+        if (curZoom > 12.0) {
+          activeIter = 800;
+        } else if (curZoom > -0.5) {
+          activeIter = 240 + (curZoom + 0.5) * (560 / 12.5);
+        }
+
+        // ------------------------------------------------------------
+        // 聖地へ向かう初期カメラ移動
+        // ------------------------------------------------------------
+        // シーン開始直後は、全体表示から選択された聖地へ滑らかに寄っていく。
+        // 直線的な等速移動では硬いので、cinematicEaseで始点と終点を少し柔らかくします。
+        const zoomStart = -0.5;
+        const zoomEnd = 0.5;
+        const moveRatioLinear = Math.max(0, Math.min(1.0, (curZoom - zoomStart) / (zoomEnd - zoomStart)));
+        const moveRatioNum = cinematicEase(moveRatioLinear);
+
+        let camX = zeroFloat;
+        let camY = zeroFloat;
+        let camOffsetXf = 0.0;
+        let camOffsetYf = 0.0;
+
+        if (moveRatioLinear < 1.0) {
+          camX = startViewCenter.x.mul(1.0 - moveRatioNum).add(anchorCenter.x.mul(moveRatioNum)).sub(anchorCenter.x);
+          camY = startViewCenter.y.mul(1.0 - moveRatioNum).add(anchorCenter.y.mul(moveRatioNum)).sub(anchorCenter.y);
+          camOffsetXf = parseFloat(camX.toString());
+          camOffsetYf = parseFloat(camY.toString());
+        }
+
+        // ------------------------------------------------------------
+        // SEA-SENSEによる海判定
+        // ------------------------------------------------------------
+        // ある程度ズームした後、画面内の5点がほぼ同じ反復結果になったら、
+        // 見どころの少ない「海」に入ったと判断し、次シーンへのフェードアウトを開始します。
+        // 毎フレーム判定するとCPU負荷が増えるため、数フレームに1回だけ確認します。
+        if (curZoom > 3.0 && transitionState === 0) {
+          seaCheckTick++;
+
+          if (seaCheckTick >= SEA_CHECK_INTERVAL) {
+            seaCheckTick = 0;
+
+            if (checkSeaCPU(Math.floor(activeIter), curScale, camX, camY)) {
+              seaFrames = Math.min(SEA_CONFIRM_FRAMES, seaFrames + SEA_CHECK_INTERVAL);
+
+              if (seaFrames >= SEA_CONFIRM_FRAMES) {
+                transitionState = 1;
+              }
+            } else {
+              seaFrames = 0;
+            }
+          }
+        }
+
+        // ------------------------------------------------------------
+        // フェード制御とシーン遷移
+        // ------------------------------------------------------------
+        // 通常時はフェードインしながら表示します。
+        // SEA-SENSEまたは深度上限でtransitionStateが立ったら、黒へフェードアウトして次シーンを準備します。
+        if (transitionState === 0) {
+          if (curZoom > 26) {
+            transitionState = 1;
+          }
+
+          fade = Math.min(1.0, fade + deltaTime / 1500);
+        } else {
+          fade = Math.max(0, fade - deltaTime / 1500);
+
+          if (fade <= 0) {
+            requestScenePrepare();
+          }
+        }
+
+        // ------------------------------------------------------------
+        // ズーム進行
+        // ------------------------------------------------------------
+        // deltaTimeに応じてスケールを縮小します。
+        // フレームレートが多少変動しても、見た目のズーム速度が大きく変わらないようにします。
+        curScale *= Math.pow(0.985, deltaTime / 16.6);
+
+        // ------------------------------------------------------------
+        // GPU uniform更新
+        // ------------------------------------------------------------
+        // uniformData の並びはWGSL側の Uniforms 構造体に合わせる。
+        // vec2 / vec4 の16byte整列に合わせるため、未使用のpadding領域も明示しています。
+        uniformData[0] = canvas.width;
+        uniformData[1] = canvas.height;
+        uniformData[2] = 0.0;
+        uniformData[3] = 0.0; // resolutionの16byte整列用padding
+        uniformData[4] = camOffsetXf;
+        uniformData[5] = 0.0; // camOffset.yは未使用
+        uniformData[6] = camOffsetYf;
+        uniformData[7] = 0.0; // camOffset.wは未使用
+        uniformData[8] = curScale;
+        uniformData[9] = Math.floor(activeIter);
+        uniformData[10] = fade;
+
+        device.queue.writeBuffer(uniformBuffer, 0, uniformData);
+
+        // ------------------------------------------------------------
+        // WebGPU描画
+        // ------------------------------------------------------------
+        // 1枚のフルスクリーン矩形を描画します。
+        // 実際のマンデルブロ計算はfragment shader側でピクセルごとに行います。
+        const commandEncoder = device.createCommandEncoder();
+        const textureView = context.getCurrentTexture().createView();
+
+        const renderPass = commandEncoder.beginRenderPass({
+          colorAttachments: [{
+            view: textureView,
+            clearValue: { r: 0, g: 0, b: 0, a: 1 },
+            loadOp: "clear",
+            storeOp: "store"
+          }]
+        });
+
+        renderPass.setPipeline(renderPipeline);
+        renderPass.setBindGroup(0, renderBindGroup);
+        renderPass.draw(6);
+        renderPass.end();
+
+        device.queue.submit([commandEncoder.finish()]);
+
+        // ------------------------------------------------------------
+        // HUD更新
+        // ------------------------------------------------------------
+        // 映像のフェード量と聖地情報の不透明度を同期させる。
+        // ズーム深度、フレームレート、SEA-SENSEの状態もここで表示します。
+        spotInfoEl.style.opacity = fade;
+
+        zoomTextEl.textContent = `ZOOM LOG 10^${curZoom.toFixed(1)}`;
+        statsEl.textContent = `FPS: ${fpsSmoothed.toFixed(1)} | MIN: ${minFps.toFixed(1)} | JANK: ${jankCount} | ITER: ${Math.floor(activeIter)} | SEA-SENSE: ${seaFrames}/${SEA_CONFIRM_FRAMES}`;
+
+        requestAnimationFrame(frame);
+      }
+      requestAnimationFrame(frame);
+    }
+    init();
+  </script>
+</body>
+</html>
